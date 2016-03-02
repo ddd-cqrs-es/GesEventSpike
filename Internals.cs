@@ -65,7 +65,7 @@ namespace GesEventSpike
                 : new[] {new NotHandled(message)};
         }
         
-        public IEnumerable<object> DispatchMany(object initialMessage)
+        public IEnumerable<object> DispatchExhaustive(object initialMessage)
         {
             var unhandledOutbox = new List<object>();
 
