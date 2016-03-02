@@ -66,7 +66,7 @@ namespace GesEventSpike.ConsoleHost
 
             _ingressSubscription = _eventStoreLiveConnection.SubscribeToStreamFrom("ingress", streamCheckpoint, false, (subscription, resolvedEvent) =>
             {
-                _mainDispatcher.DispatchMany(resolvedEvent);
+                _mainDispatcher.DispatchExhaustive(resolvedEvent);
             });
         }
 
@@ -115,11 +115,11 @@ namespace GesEventSpike.ConsoleHost
                 });
 
                 var typedMainEnvelope = Envelope.CreateGeneric(mainEnvelope.Header, mainEnvelope.Body);
-                var results = scopedDispatcher.DispatchMany(typedMainEnvelope);
+                var unhandled = scopedDispatcher.DispatchExhaustive(typedMainEnvelope);
 
                 transaction.Commit();
 
-                return results.Select(result => Envelope.CreateGeneric(mainEnvelope.Header, result));
+                return unhandled;
             }
         }
 

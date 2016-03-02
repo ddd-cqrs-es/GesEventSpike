@@ -44,5 +44,4 @@ namespace GesEventSpike.ConsoleHost
             Console.WriteLine("Stopping...");
         }
     }
-
 }
