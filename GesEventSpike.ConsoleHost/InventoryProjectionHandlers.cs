@@ -9,7 +9,7 @@ namespace GesEventSpike.ConsoleHost
 {
     public static class InventoryProjectionHandlers
     {
-        public static IEnumerable<object> Handle(ItemPurchased purchased, Guid nextEventId, int checkpointPosition)
+        public static IEnumerable<object> Project(ItemPurchased purchased, Guid nextEventId, int checkpointPosition)
         {
             yield return TSql.NonQueryStatement(@"insert into ItemsPurchased (StockKeepingUnit) values (@StockKeepingUnit)", new
             {
@@ -24,7 +24,7 @@ namespace GesEventSpike.ConsoleHost
             yield return new WriteToStream(nextEventId, "egress", new CheckpointEvent(checkpointPosition), new Dictionary<string, object>());
         }
 
-        public static IEnumerable<SqlNonQueryCommand> HandleCreateSchema()
+        public static IEnumerable<SqlNonQueryCommand> CreateSchema()
         {
             yield return TSql.NonQueryStatement(ScriptContents.CreateSchema);
         }

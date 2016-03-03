@@ -60,7 +60,7 @@ namespace GesEventSpike.ConsoleHost
             _mainDispatcher = new Dispatcher();
 
             _mainDispatcher.Register<ResolvedEvent>(resolvedEvent => EventStoreHandlers
-                .Handle(resolvedEvent.Event, MessageTypeLookup));
+                .Deserialize(resolvedEvent.Event, MessageTypeLookup));
 
             _mainDispatcher.Register<Envelope<MessageContext, object>>(ScopedHandle);
 
@@ -73,20 +73,21 @@ namespace GesEventSpike.ConsoleHost
         private IEnumerable<object> ScopedHandle(Envelope<MessageContext, object> mainEnvelope)
         {
             var tenantId = mainEnvelope.Header.MetadataLookup["tenantId"].First() as string;
+            if (tenantId == null) return new[] {new NotHandled(mainEnvelope)};
 
             var scopedDispatcher = new Dispatcher();
 
             scopedDispatcher.Register<WriteToStream>(writeToStream =>
             {
                 var envelope = Envelope.Create(mainEnvelope.Header, writeToStream);
-                Task.WhenAll(EventStoreHandlers.HandleAsync(envelope, _eventStoreLiveConnection)).Wait();
+                Task.WhenAll(EventStoreHandlers.WriteAsync(envelope, _eventStoreLiveConnection)).Wait();
                 return Enumerable.Empty<object>();
             });
 
             scopedDispatcher.Register<Envelope<MessageContext, ItemPurchased>>(envelope =>
             {
                 var eventId = DeterministicGuid.Create(mainEnvelope.Header.EventId);
-                return InventoryProjectionHandlers.Handle(envelope.Body, eventId, envelope.Header.StreamContext.EventNumber);
+                return InventoryProjectionHandlers.Project(envelope.Body, eventId, envelope.Header.StreamContext.EventNumber);
             });
 
             var connectionSettingsFactory = new MultitenantSqlConnectionSettingsFactory(tenantId);
@@ -96,7 +97,7 @@ namespace GesEventSpike.ConsoleHost
             _hasInitialized.GetOrAdd(tenantId, _ =>
             {
                 var executor = new SqlCommandExecutor(connectionStringSettings);
-                executor.ExecuteNonQuery(InventoryProjectionHandlers.HandleCreateSchema());
+                executor.ExecuteNonQuery(InventoryProjectionHandlers.CreateSchema());
                 return Nothing.Value;
             });
 

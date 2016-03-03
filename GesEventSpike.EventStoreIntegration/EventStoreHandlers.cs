@@ -10,7 +10,7 @@ namespace GesEventSpike.EventStoreIntegration
 {
     public class EventStoreHandlers
     {
-        public static IEnumerable<Envelope<MessageContext, object>> Handle(RecordedEvent recordedEvent, ILookup<string, Type> typeLookup, JsonSerializerSettings settings = null)
+        public static IEnumerable<Envelope<MessageContext, object>> Deserialize(RecordedEvent recordedEvent, ILookup<string, Type> typeLookup, JsonSerializerSettings settings = null)
         {
             var additionalMetadata = EventSerializer.DeserializeMetadata(recordedEvent, settings);
             var message = EventSerializer.Deserialize(recordedEvent, typeLookup, settings);
@@ -21,7 +21,7 @@ namespace GesEventSpike.EventStoreIntegration
             yield return Envelope.Create(messageContext, message);
         }
 
-        public static IEnumerable<Task<WriteResult>> HandleAsync(Envelope<MessageContext, WriteToStream> envelope, IEventStoreConnection connection, JsonSerializerSettings settings = null)
+        public static IEnumerable<Task<WriteResult>> WriteAsync(Envelope<MessageContext, WriteToStream> envelope, IEventStoreConnection connection, JsonSerializerSettings settings = null)
         {
             yield return EventWriter.Write(envelope, connection, settings);
         }
