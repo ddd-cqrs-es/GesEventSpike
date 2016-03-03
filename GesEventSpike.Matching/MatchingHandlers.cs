@@ -35,27 +35,31 @@ namespace GesEventSpike.Matching
 
         public static async Task<IEnumerable<string>> QueryBestCandidate(int[] bucketHashes, IDatabase database)
         {
-            var candidates = new string[BandCount][];
+            var readTasks = new Task<RedisValue[]>[BandCount];
 
             for (var bandIndex = 0; bandIndex < BandCount; bandIndex++)
             {
                 var bucketHash = bucketHashes[bandIndex];
                 var listKey = string.Format(KeyFormat, bandIndex, bucketHash);
 
-                var result = await database.ListRangeAsync(listKey);
-                candidates[bandIndex] = result.ToStringArray();
+                readTasks[bandIndex] = database.ListRangeAsync(listKey);
             }
 
-            var bestCandidates = candidates
-                .SelectMany(bandCandidates => bandCandidates)
-                .GroupBy(id => id)
-                .GroupBy(keyIs => keyIs.Count())
-                .OrderByDescending(by => by.Key)
-                .SelectMany(byCount => byCount.Select(byId => byId.Key))
-                .Take(1)
-                .ToArray();
+            return await Task.WhenAll(readTasks).ContinueWith(task =>
+            {
+                var candidates = task.Result;
 
-            return bestCandidates;
+                var bestCandidates = candidates
+                    .SelectMany(bandCandidates => bandCandidates)
+                    .GroupBy(id => id)
+                    .GroupBy(keyIs => keyIs.Count())
+                    .OrderByDescending(by => by.Key)
+                    .SelectMany(byCount => byCount.Select(byId => byId.Key.ToString()))
+                    .Take(1)
+                    .ToArray();
+
+                return bestCandidates;
+            });
         }
     }
 }
