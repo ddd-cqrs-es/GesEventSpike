@@ -9,7 +9,7 @@ namespace GesEventSpike.Matching
     {
         private const string KeyFormat = "matching:band-{0}:bucket-{1}";
 
-        public static int[] GetBucketHashes(int[] signature, int bandCount)
+        public static int[] GetBandHashes(int[] signature, int bandCount)
         {
             var bandLength = signature.Length/bandCount;
 
@@ -21,24 +21,18 @@ namespace GesEventSpike.Matching
                 .ToArray();
         }
 
-        public static IEnumerable<Task> Index(string documentId, int[] bucketHashes, IDatabase database)
+        public static IEnumerable<Task> Index(string documentId, int[] bandHashes, IDatabase database)
         {
-            return bucketHashes
+            return bandHashes
                 .Select((bucketHash, bandIndex) => string.Format(KeyFormat, bandIndex, bucketHash))
                 .Select(listKey => database.ListLeftPushAsync(listKey, documentId));
         }
 
-        public static async Task<IEnumerable<string>> QueryBestCandidate(int[] bucketHashes, IDatabase database)
+        public static async Task<IEnumerable<string>> QueryBestCandidate(int[] bandHashes, IDatabase database)
         {
-            var readTasks = new Task<RedisValue[]>[bucketHashes.Length];
-
-            for (var bandIndex = 0; bandIndex < bucketHashes.Length; bandIndex++)
-            {
-                var bucketHash = bucketHashes[bandIndex];
-                var listKey = string.Format(KeyFormat, bandIndex, bucketHash);
-
-                readTasks[bandIndex] = database.ListRangeAsync(listKey);
-            }
+            var readTasks = bandHashes
+                .Select((bandHash, bandIndex) => string.Format(KeyFormat, bandIndex, bandHash))
+                .Select(listKey => database.ListRangeAsync(listKey));
 
             return await Task.WhenAll(readTasks).ContinueWith(task =>
             {
