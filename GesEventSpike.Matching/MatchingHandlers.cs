@@ -28,11 +28,13 @@ namespace GesEventSpike.Matching
                 .Select(listKey => database.ListLeftPushAsync(listKey, documentId));
         }
 
-        public static async Task<IEnumerable<string>> QueryBestCandidate(int[] bandHashes, IDatabase database)
+        public static async Task<IEnumerable<string>> QueryBestMatch(int[] bandHashes, double similarityThreshold, IDatabase database)
         {
             var readTasks = bandHashes
                 .Select((bandHash, bandIndex) => string.Format(KeyFormat, bandIndex, bandHash))
                 .Select(listKey => database.ListRangeAsync(listKey));
+
+            var minimumHits = bandHashes.Length*(1 - similarityThreshold);
 
             return await Task.WhenAll(readTasks).ContinueWith(task =>
             {
@@ -41,6 +43,7 @@ namespace GesEventSpike.Matching
                 var bestCandidates = candidates
                     .SelectMany(bandCandidates => bandCandidates)
                     .GroupBy(id => id)
+                    .Where(byKey => byKey.Count() > minimumHits)
                     .GroupBy(keyIs => keyIs.Count())
                     .OrderByDescending(by => by.Key)
                     .SelectMany(byCount => byCount.Select(byId => byId.Key.ToString()))
