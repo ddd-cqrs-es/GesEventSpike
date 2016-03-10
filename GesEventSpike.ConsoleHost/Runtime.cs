@@ -5,6 +5,7 @@ using System.Data.SqlClient;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
+using System.Threading.Tasks.Dataflow;
 using EventStore.ClientAPI;
 using GesEventSpike.Core;
 using GesEventSpike.EventStoreIntegration;
@@ -21,10 +22,10 @@ namespace GesEventSpike.ConsoleHost
             typeof (CheckpointEvent)
         }.ToLookup(keyIs => keyIs.Name, valueIs => valueIs, StringComparer.OrdinalIgnoreCase);
 
-        private static readonly DeterministicGuid DeterministicGuid = new DeterministicGuid(new Guid("B7441838-37F6-47D6-B74B-A268690BA312"));
+        private static readonly DeterministicGuid EventId = new DeterministicGuid(new Guid("B7441838-37F6-47D6-B74B-A268690BA312"));
 
         private readonly EventStoreStreamCatchUpSubscription _ingressSubscription;
-        private readonly IEventStoreConnection _eventStoreLiveConnection;
+        private readonly IEventStoreConnection _eventStoreConnection;
         private readonly Dispatcher _mainDispatcher;
         private readonly ConcurrentDictionary<string, Nothing> _hasInitialized = new ConcurrentDictionary<string, Nothing>(); 
 
@@ -53,19 +54,22 @@ namespace GesEventSpike.ConsoleHost
             return new Runtime(connection, streamCheckpoint);
         }
 
-        private Runtime(IEventStoreConnection liveConnection, int? streamCheckpoint)
+        private Runtime(IEventStoreConnection eventStoreConnection, int? streamCheckpoint)
         {
-            _eventStoreLiveConnection = liveConnection;
+            _eventStoreConnection = eventStoreConnection;
 
             _mainDispatcher = new Dispatcher();
+
+            var queue = new BufferBlock<ResolvedEvent>(new DataflowBlockOptions {BoundedCapacity = 5});
 
             _mainDispatcher.Register<ResolvedEvent>(resolvedEvent => EventStoreHandlers
                 .Deserialize(resolvedEvent.Event, MessageTypeLookup));
 
             _mainDispatcher.Register<Envelope<MessageContext, object>>(ScopedHandle);
 
-            _ingressSubscription = _eventStoreLiveConnection.SubscribeToStreamFrom("ingress", streamCheckpoint, false, (subscription, resolvedEvent) =>
+            _ingressSubscription = _eventStoreConnection.SubscribeToStreamFrom("ingress", streamCheckpoint, false, async (subscription, resolvedEvent) =>
             {
+                await queue.SendAsync(resolvedEvent);
                 _mainDispatcher.DispatchExhaustive(resolvedEvent);
             });
         }
@@ -80,13 +84,13 @@ namespace GesEventSpike.ConsoleHost
             scopedDispatcher.Register<WriteToStream>(writeToStream =>
             {
                 var envelope = Envelope.Create(mainEnvelope.Header, writeToStream);
-                Task.WhenAll(EventStoreHandlers.WriteAsync(envelope, _eventStoreLiveConnection)).Wait();
+                Task.WhenAll(EventStoreHandlers.WriteAsync(envelope, _eventStoreConnection)).Wait();
                 return Enumerable.Empty<object>();
             });
 
             scopedDispatcher.Register<Envelope<MessageContext, ItemPurchased>>(envelope =>
             {
-                var eventId = DeterministicGuid.Create(mainEnvelope.Header.EventId);
+                var eventId = EventId.Create(mainEnvelope.Header.EventId);
                 return InventoryProjectionHandlers.Project(envelope.Body, eventId, envelope.Header.StreamContext.EventNumber);
             });
 

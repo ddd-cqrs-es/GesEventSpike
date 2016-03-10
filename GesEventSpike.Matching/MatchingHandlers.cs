@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+﻿using System;
 using System.Linq;
 using System.Threading.Tasks;
 using StackExchange.Redis;
@@ -7,51 +7,51 @@ namespace GesEventSpike.Matching
 {
     public static class MatchingHandlers
     {
-        private const string KeyFormat = "matching:band-{0}:bucket-{1}";
+        private static readonly DeterministicGuid EssenceId = new DeterministicGuid(new Guid("16BC1390-AFA1-4987-90EF-57C2B2029F53"));
 
-        public static int[] GetBandHashes(int[] signature, int bandCount)
+        private const string
+            KeyFormat = "matching:{0}:{1}";
+
+        public static async Task<string> GetOrCreateEssence(DemographicsDocument document, IDatabaseAsync database)
         {
-            var bandLength = signature.Length/bandCount;
+            var keys = GetKeys(document);
 
-            return Enumerable.Range(0, bandCount)
-                .Select(bandIndex => signature
-                    .Skip(bandIndex*bandLength)
-                    .Take(bandLength)
-                    .Aggregate((first, second) => first ^ second))
-                .ToArray();
+            var results = await Task.WhenAll(keys.Select(key => database.StringGetAsync(key)).ToArray());
+
+            var maybeMatches = results
+                .Zip(keys, (value, key) => new {Key = key, Value = value})
+                .ToLookup(x => x.Value.HasValue);
+            
+            var essenceId = maybeMatches[true]
+                .Select(redisValue => (string)redisValue.Value)
+                .GroupBy(_ => _)
+                .OrderByDescending(valueGroup => valueGroup.Count())
+                .Select(valueGroup => valueGroup.Key)
+                .FirstOrDefault();
+
+            essenceId = essenceId ?? EssenceId.Create(document.DocumentId).ToString("N");
+
+            var unmatchedKeys = maybeMatches[false].Select(x => x.Key).ToArray();
+
+            await Task.WhenAll(unmatchedKeys.Select(key => database.StringSetAsync(key, essenceId)));
+
+            return essenceId;
         }
 
-        public static IEnumerable<Task> Index(string documentId, int[] bandHashes, IDatabase database)
+        private static string[] GetKeys(DemographicsDocument document)
         {
-            return bandHashes
-                .Select((bucketHash, bandIndex) => string.Format(KeyFormat, bandIndex, bucketHash))
-                .Select(listKey => database.ListLeftPushAsync(listKey, documentId));
-        }
+            var demographicsToken = new[] { document.LastName, document.BirthDate.ToString("yyyyMMdd") }
+                .Select(value => value.ToLower())
+                .StringJoin("-");
 
-        public static async Task<IEnumerable<string>> QueryBestMatch(int[] bandHashes, double similarityThreshold, IDatabase database)
-        {
-            var readTasks = bandHashes
-                .Select((bandHash, bandIndex) => string.Format(KeyFormat, bandIndex, bandHash))
-                .Select(listKey => database.ListRangeAsync(listKey));
-
-            var minimumHits = bandHashes.Length*(1 - similarityThreshold);
-
-            return await Task.WhenAll(readTasks).ContinueWith(task =>
+            return new[]
             {
-                var candidates = task.Result;
-
-                var bestCandidates = candidates
-                    .SelectMany(bandCandidates => bandCandidates)
-                    .GroupBy(id => id)
-                    .Where(byKey => byKey.Count() > minimumHits)
-                    .GroupBy(keyIs => keyIs.Count())
-                    .OrderByDescending(by => by.Key)
-                    .SelectMany(byCount => byCount.Select(byId => byId.Key.ToString()))
-                    .Take(1)
-                    .ToArray();
-
-                return bestCandidates;
-            });
+                new object[] {"record", document.RecordId.ToLower()},
+                new object[] {"session", document.SessionId.ToLower()},
+                new object[] {"demographics", demographicsToken}
+            }
+                .Select(formatArguments => string.Format(KeyFormat, formatArguments))
+                .ToArray();
         }
     }
 }

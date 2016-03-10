@@ -50,13 +50,18 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="..\Internals.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="DemographicsDocument.cs" />
     <Compile Include="MatchingHandlers.cs" />
-    <Compile Include="MinHasher.cs" />
-    <Compile Include="MinHashSeedFactory.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="packages.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="App.config" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 

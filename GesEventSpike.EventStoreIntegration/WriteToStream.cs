@@ -10,12 +10,12 @@ namespace GesEventSpike.EventStoreIntegration
         public readonly object Data;
         public readonly IDictionary<string, object> Metadata;
 
-        public WriteToStream(Guid id, string streamId, object data, IDictionary<string, object> metadata)
+        public WriteToStream(Guid id, string streamId, object data, IDictionary<string, object> metadata = null)
         {
             Id = id;
             StreamId = streamId;
             Data = data;
-            Metadata = metadata;
+            Metadata = metadata ?? new Dictionary<string, object>();
         }
     }
 }

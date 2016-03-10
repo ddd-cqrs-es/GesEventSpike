@@ -21,7 +21,7 @@ namespace GesEventSpike.ConsoleHost
                 Position = TSql.Int(checkpointPosition)
             });
 
-            yield return new WriteToStream(nextEventId, "egress", new CheckpointEvent(checkpointPosition), new Dictionary<string, object>());
+            yield return new WriteToStream(nextEventId, "egress", new CheckpointEvent(checkpointPosition));
         }
 
         public static IEnumerable<SqlNonQueryCommand> CreateSchema()

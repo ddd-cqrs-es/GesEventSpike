@@ -10,6 +10,14 @@ using System.Text;
 
 namespace GesEventSpike
 {
+    internal static class ExtensionsForString
+    {
+        public static string StringJoin(this IEnumerable<string> source, string seperator)
+        {
+            return string.Join(seperator, source);
+        }
+    }
+
     internal static class ResourceCache
     {
         private static readonly Assembly SelfAssembly = typeof(ResourceCache).Assembly;
