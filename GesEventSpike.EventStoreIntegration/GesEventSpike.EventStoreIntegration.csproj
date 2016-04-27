@@ -50,7 +50,6 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="EventStoreHandlers.cs" />
-    <Compile Include="EventWriter.cs" />
     <Compile Include="MessageContext.cs" />
     <Compile Include="EventSerializer.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

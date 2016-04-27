@@ -8,6 +8,8 @@ namespace GesEventSpike.ConsoleHost
 {
     internal class Program
     {
+        private static readonly EventData[] EventsBuffer = new EventData[1];
+
         private static void Main(string[] args)
         {
             var runtime = Runtime.StartNewAsync().Result;
@@ -35,7 +37,8 @@ namespace GesEventSpike.ConsoleHost
                 };
                 var eventData = EventSerializer.Serialize(Guid.NewGuid(), @event, metadata);
 
-                connection.AppendToStreamAsync("ingress", ExpectedVersion.Any, eventData).Wait();
+                EventsBuffer[0] = eventData;
+                connection.AppendToStreamAsync("ingress", ExpectedVersion.Any, EventsBuffer).Wait();
 
                 Console.WriteLine("Appended event");
             } while (!string.Equals(input, "q"));

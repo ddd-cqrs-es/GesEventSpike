@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Data.SqlClient;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
@@ -9,8 +8,6 @@ using System.Threading.Tasks.Dataflow;
 using EventStore.ClientAPI;
 using GesEventSpike.Core;
 using GesEventSpike.EventStoreIntegration;
-using Paramol;
-using Paramol.Executors;
 
 namespace GesEventSpike.ConsoleHost
 {
@@ -24,10 +21,12 @@ namespace GesEventSpike.ConsoleHost
 
         private static readonly DeterministicGuid EventId = new DeterministicGuid(new Guid("B7441838-37F6-47D6-B74B-A268690BA312"));
 
-        private readonly EventStoreStreamCatchUpSubscription _ingressSubscription;
+        private readonly TaskCompletionSource<Nothing> _initializedCompletionSource = new TaskCompletionSource<Nothing>(); 
         private readonly IEventStoreConnection _eventStoreConnection;
-        private readonly Dispatcher _mainDispatcher;
-        private readonly ConcurrentDictionary<string, Nothing> _hasInitialized = new ConcurrentDictionary<string, Nothing>(); 
+        private readonly ConcurrentDictionary<string, Nothing> _hasInitialized = new ConcurrentDictionary<string, Nothing>();
+        private readonly ITargetBlock<ResolvedEvent> _inputBlock;
+
+        private EventStoreStreamCatchUpSubscription _ingressSubscription;
 
         public static async Task<Runtime> StartNewAsync()
         {
@@ -39,93 +38,127 @@ namespace GesEventSpike.ConsoleHost
             var connection = EventStoreConnection
                 .Create(connectionSettings, new IPEndPoint(IPAddress.Loopback, 1113));
 
+            var instance = new Runtime(connection);
+
+            connection.Connected += instance.OnConnected;
+            
             await connection.ConnectAsync();
+            await instance._initializedCompletionSource.Task;
 
-            var readResult = await connection.ReadEventAsync("egress", StreamPosition.End, false);
+            return instance;
+        }
 
-            var streamCheckpoint = new[] {readResult.Event}
+        private async void OnConnected(object sender, ClientConnectionEventArgs connectedEvent)
+        {
+            var readResult = await _eventStoreConnection.ReadEventAsync("egress", StreamPosition.End, false);
+
+            var streamCheckpoint = new[] { readResult.Event }
                 .Where(maybeEvent => maybeEvent.HasValue)
                 .Select(resolvedEvent => EventSerializer.Deserialize(resolvedEvent.Value.Event, MessageTypeLookup))
                 .Cast<CheckpointEvent>()
                 .Select(checkpointEvent => checkpointEvent.Position as int?)
                 .DefaultIfEmpty(StreamCheckpoint.StreamStart)
                 .First();
-            
-            return new Runtime(connection, streamCheckpoint);
+
+            _ingressSubscription = _eventStoreConnection.SubscribeToStreamFrom("ingress", streamCheckpoint, false, OnEvent);
+
+            _initializedCompletionSource.TrySetResult(Nothing.Value);
         }
 
-        private Runtime(IEventStoreConnection eventStoreConnection, int? streamCheckpoint)
+        private void OnEvent(EventStoreCatchUpSubscription subscription, ResolvedEvent resolvedEvent)
+        {
+            _inputBlock.SendAsync(resolvedEvent).Wait();
+        }
+
+        private Runtime(IEventStoreConnection eventStoreConnection)
         {
             _eventStoreConnection = eventStoreConnection;
 
-            _mainDispatcher = new Dispatcher();
-
-            var queue = new BufferBlock<ResolvedEvent>(new DataflowBlockOptions {BoundedCapacity = 5});
-
-            _mainDispatcher.Register<ResolvedEvent>(resolvedEvent => EventStoreHandlers
+            var deserializerBlock = new TransformBlock<ResolvedEvent, Tuple<MessageContext, object>>(resolvedEvent => EventStoreHandlers
                 .Deserialize(resolvedEvent.Event, MessageTypeLookup));
+            
+            var batchBlock = new BatchBlock<Tuple<MessageContext, object>>(512);
 
-            _mainDispatcher.Register<Envelope<MessageContext, object>>(ScopedHandle);
+            deserializerBlock.LinkTo(batchBlock);
 
-            _ingressSubscription = _eventStoreConnection.SubscribeToStreamFrom("ingress", streamCheckpoint, false, async (subscription, resolvedEvent) =>
+            var tenantSplitBlock = new TransformManyBlock<Tuple<MessageContext, object>[], Tuple<string, Tuple<MessageContext, object>[]>>(batchedEnvelopes =>
             {
-                await queue.SendAsync(resolvedEvent);
-                _mainDispatcher.DispatchExhaustive(resolvedEvent);
+                return batchedEnvelopes
+                    .GroupBy(envelope => envelope.Item1.MetadataLookup["tenantId"].OfType<string>().FirstOrDefault())
+                    .Select(group => Tuple.Create(group.Key, group.ToArray()));
             });
+
+            batchBlock.LinkTo(tenantSplitBlock);
+
+            var handlerBlock = new ActionBlock<Tuple<string, Tuple<MessageContext, object>[]>>(envelope =>
+            {
+                var tenantId = envelope.Item1;
+            });
+
+            tenantSplitBlock.LinkTo(handlerBlock);
+
+            var eventWriterBlock = new ActionBlock<object>(async envelope =>
+            {
+                await EventStoreHandlers.WriteAsync((Envelope<MessageContext, WriteToStream>)envelope, _eventStoreConnection);
+            });
+
+            //handlerBlock.LinkTo(eventWriterBlock, message => message is Envelope<MessageContext, WriteToStream>);
+
+            //handlerBlock.LinkTo(projectorBatchBlock, message => message is SqlNonQueryCommand);
+
+            //var projectorBlock = new ActionBlock<SqlNonQueryCommand>(envelope =>
+            //{
+                
+            //});
+
+
+
+            //var connectionSettingsFactory = new MultitenantSqlConnectionSettingsFactory(tenantId);
+            //var connectionStringSettings = connectionSettingsFactory.GetSettings("Projections");
+            //var connectionString = connectionStringSettings.ConnectionString;
+
+            //_hasInitialized.GetOrAdd(tenantId, _ =>
+            //{
+            //    var executor = new SqlCommandExecutor(connectionStringSettings);
+            //    executor.ExecuteNonQuery(InventoryProjectionHandlers.CreateSchema());
+            //    return Nothing.Value;
+            //});
+
+            //var sqlConnection = new SqlConnection(connectionString);
+            //sqlConnection.Open();
+
+            //using (sqlConnection)
+            //using (var transaction = sqlConnection.BeginTransaction())
+            //{
+            //    var sqlExecutor = new ConnectedTransactionalSqlCommandExecutor(transaction);
+
+            //    dispatcher.Register<SqlNonQueryCommand>(command =>
+            //    {
+            //        sqlExecutor.ExecuteNonQuery(command);
+            //        return Enumerable.Empty<object>();
+            //    });
+
+            //    var outbox = await dispatcher.DispatchExhaustiveAsync(envelope.Body);
+
+            //    transaction.Commit();
+
+            //    return outbox;
+            //}
+            
+            _inputBlock = deserializerBlock;
         }
 
-        private IEnumerable<object> ScopedHandle(Envelope<MessageContext, object> mainEnvelope)
+        private async Task<IEnumerable<object>> ScopedHandle(Envelope<MessageContext, object> envelope)
         {
-            var tenantId = mainEnvelope.Header.MetadataLookup["tenantId"].First() as string;
-            if (tenantId == null) return new[] {new NotHandled(mainEnvelope)};
+            var tenantId = envelope.Header.MetadataLookup["tenantId"].First() as string;
+            if (tenantId == null) return Enumerable.Empty<object>();
 
-            var scopedDispatcher = new Dispatcher();
+            var dispatcher = new Dispatcher();
 
-            scopedDispatcher.Register<WriteToStream>(writeToStream =>
-            {
-                var envelope = Envelope.Create(mainEnvelope.Header, writeToStream);
-                Task.WhenAll(EventStoreHandlers.WriteAsync(envelope, _eventStoreConnection)).Wait();
-                return Enumerable.Empty<object>();
-            });
+            var eventId = EventId.Create(envelope.Header.EventId);
 
-            scopedDispatcher.Register<Envelope<MessageContext, ItemPurchased>>(envelope =>
-            {
-                var eventId = EventId.Create(mainEnvelope.Header.EventId);
-                return InventoryProjectionHandlers.Project(envelope.Body, eventId, envelope.Header.StreamContext.EventNumber);
-            });
-
-            var connectionSettingsFactory = new MultitenantSqlConnectionSettingsFactory(tenantId);
-            var connectionStringSettings = connectionSettingsFactory.GetSettings("Projections");
-            var connectionString = connectionStringSettings.ConnectionString;
-
-            _hasInitialized.GetOrAdd(tenantId, _ =>
-            {
-                var executor = new SqlCommandExecutor(connectionStringSettings);
-                executor.ExecuteNonQuery(InventoryProjectionHandlers.CreateSchema());
-                return Nothing.Value;
-            });
-
-            var sqlConnection = new SqlConnection(connectionString);
-            sqlConnection.Open();
-
-            using (sqlConnection)
-            using (var transaction = sqlConnection.BeginTransaction())
-            {
-                var sqlExecutor = new ConnectedTransactionalSqlCommandExecutor(transaction);
-
-                scopedDispatcher.Register<SqlNonQueryCommand>(command =>
-                {
-                    sqlExecutor.ExecuteNonQuery(command);
-                    return Enumerable.Empty<object>();
-                });
-
-                var typedMainEnvelope = Envelope.CreateGeneric(mainEnvelope.Header, mainEnvelope.Body);
-                var unhandled = scopedDispatcher.DispatchExhaustive(typedMainEnvelope);
-
-                transaction.Commit();
-
-                return unhandled;
-            }
+            dispatcher.Register<ItemPurchased>(itemPurchased => InventoryProjectionHandlers
+                .Project(itemPurchased, eventId, envelope.Header.StreamContext.EventNumber));
         }
 
         public void Stop()

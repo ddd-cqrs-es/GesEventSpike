@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Resources;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace GesEventSpike
 {
@@ -42,8 +43,8 @@ namespace GesEventSpike
 
     internal class Nothing
     {
-        private Nothing() { }
         public static readonly Nothing Value = new Nothing();
+        private Nothing() { }
     }
 
     internal class NotHandled
@@ -58,42 +59,68 @@ namespace GesEventSpike
 
     internal class Dispatcher
     {
-        private readonly Dictionary<Type, Func<object, IEnumerable<object>>> _lookup = new Dictionary<Type, Func<object, IEnumerable<object>>>();
+        private readonly Dictionary<Type, Func<object, Task<object>>> _lookup = new Dictionary<Type, Func<object, Task<object>>>();
 
-        public void Register<T>(Func<T, IEnumerable<object>> handler)
+        public void Register<TInput>(Func<TInput, object> handler)
         {
-            _lookup.Add(typeof (T), message => handler((T) message));
+            _lookup.Add(typeof(TInput), message => Task.FromResult(handler((TInput)message)));
+        }
+
+        public void Register<TInput>(Action<TInput> handler)
+        {
+            _lookup.Add(typeof(TInput), message =>
+            {
+                handler((TInput)message);
+                return Task.FromResult(Nothing.Value as object);
+            });
+        }
+
+        public void Register<TInput>(Func<TInput, Task> handler)
+        {
+            _lookup.Add(typeof(TInput), async message =>
+            {
+                await handler((TInput) message);
+                return Nothing.Value;
+            });
+        }
+
+        public void Register<TInput, TResult>(Func<TInput, Task<TResult>> handler)
+        {
+            _lookup.Add(typeof(TInput), async message => await handler((TInput)message));
         }
         
-        public IEnumerable<object> Dispatch<TMessage>(TMessage message)
+        public async Task<object> DispatchAsync(object message)
         {
-            Func<object, IEnumerable<object>> handler;
-            return _lookup.TryGetValue(message.GetType(), out handler)
+            Func<object, Task<object>> handler;
+            var handlerTask = _lookup.TryGetValue(message.GetType(), out handler)
                 ? handler(message)
-                : new[] {new NotHandled(message)};
-        }
-        
-        public IEnumerable<object> DispatchExhaustive(object initialMessage)
-        {
-            var unhandledOutbox = new List<object>();
+                : Task.FromResult(new NotHandled(message) as object);
 
-            var outbox = new[] { initialMessage };
+            return await handlerTask;
+        }
+
+        public async Task<IEnumerable<object>> DispatchExhaustiveAsync(object initialMessage)
+        {
+            var outbox = new List<object>();
+
+            var inbox = new[] { initialMessage };
             do
             {
-                var results = outbox.Select(Dispatch)
+                var results = await Task.WhenAll(inbox.Select(DispatchAsync));
+
+                var lookup = results
+                    .GroupBy(message => message is NotHandled)
                     .Select(_ => _.ToArray())
-                    .SelectMany(_ => _)
-                    .ToArray()
-                    .ToLookup(message => message is NotHandled);
+                    .ToArray();
 
-                outbox = results[false].ToArray();
-
-                unhandledOutbox.AddRange(results[true]
+                outbox.AddRange(lookup[0]
                     .OfType<NotHandled>()
                     .Select(notHandled => notHandled.Message));
-            } while (outbox.Any());
 
-            return unhandledOutbox;
+                inbox = lookup[1];
+            } while (inbox.Any());
+
+            return outbox;
         }
     }
 

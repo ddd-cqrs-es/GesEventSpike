@@ -41,7 +41,18 @@ namespace GesEventSpike.EventStoreIntegration
             return JsonConvert.DeserializeObject(messageJson, messageType, settings);
         }
 
-        public static IDictionary<string, object> DeserializeMetadata(RecordedEvent recordedEvent, JsonSerializerSettings settings = null)
+        public static IDictionary<string, object>
+
+
+
+
+
+
+
+
+
+
+DeserializeMetadata(RecordedEvent recordedEvent, JsonSerializerSettings settings = null)
         {
             settings = settings ?? DefaultSerializerSettings;
 

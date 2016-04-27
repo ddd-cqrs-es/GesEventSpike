@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using EventStore.ClientAPI;
@@ -10,7 +9,7 @@ namespace GesEventSpike.EventStoreIntegration
 {
     public class EventStoreHandlers
     {
-        public static IEnumerable<Envelope<MessageContext, object>> Deserialize(RecordedEvent recordedEvent, ILookup<string, Type> typeLookup, JsonSerializerSettings settings = null)
+        public static Tuple<MessageContext, object> Deserialize(RecordedEvent recordedEvent, ILookup<string, Type> typeLookup, JsonSerializerSettings settings = null)
         {
             var additionalMetadata = EventSerializer.DeserializeMetadata(recordedEvent, settings);
             var message = EventSerializer.Deserialize(recordedEvent, typeLookup, settings);
@@ -18,12 +17,18 @@ namespace GesEventSpike.EventStoreIntegration
             var streamContext = new StreamContext(recordedEvent.EventNumber, recordedEvent.EventStreamId);
             var messageContext = new MessageContext(recordedEvent.EventId, streamContext, additionalMetadata);
 
-            yield return Envelope.Create(messageContext, message);
+            return Tuple.Create(messageContext, message);
         }
 
-        public static IEnumerable<Task<WriteResult>> WriteAsync(Envelope<MessageContext, WriteToStream> envelope, IEventStoreConnection connection, JsonSerializerSettings settings = null)
+        public static async Task<WriteResult> WriteAsync(MessageContext messageContext, WriteToStream streamWrite, IEventStoreConnection connection, JsonSerializerSettings settings = null)
         {
-            yield return EventWriter.Write(envelope, connection, settings);
+            streamWrite.Metadata["$causationId"] = messageContext.EventId;
+            streamWrite.Metadata["$correlationId"] = messageContext.MetadataLookup["$correlationId"].FirstOrDefault();
+            streamWrite.Metadata["tenantId"] = messageContext.MetadataLookup["tenantId"].FirstOrDefault();
+
+            var eventData = EventSerializer.Serialize(streamWrite.Id, streamWrite.Data, streamWrite.Metadata, settings);
+
+            return await connection.AppendToStreamAsync(streamWrite.StreamId, ExpectedVersion.Any, eventData);
         }
     }
 }
